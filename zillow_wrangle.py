@@ -5,6 +5,9 @@ from env import get_db_url
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+import math
+
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 
 #Function to import the SQL database into jupyter notebook
 def zillow_data():
@@ -28,7 +31,8 @@ def zillow_data():
     poolcnt,
     regionidcounty,
     garagecarcnt,
-    pred.logerror,
+    pred.logerror as logerror17,
+    pred16.logerror as logerror16,
     pred.transactiondate as transaction17,
     pred16.transactiondate as transaction16
 FROM
@@ -155,6 +159,21 @@ def series_upper_outliers(s, k=1.5):
     return s.apply(lambda x: max([x - upper_bound, 0]))
 
 
+def split_scale(df):
+    # Copy a new dataframe to perform feature engineering
+    scaled_df = df.copy()
+    scaler = RobustScaler()
+    # Split the scaled data into train, validate, test
+    train, validate, test = zillow_wrangle.split_data(scaled_df)
+    # Columns to scale
+    cols = ['calculatedfinishedsquarefeet', 'lotsizesquarefeet', 'rawcensustractandblock', 'garagecarcnt', 'house_age', 'polar_combo', 'weird_ratio', 'cen_ratio', 'raw_cen_bin']
+    # Fit numerical features to scaler
+    scaler.fit(train[cols])
+    # Set the features to transformed value
+    train[cols] = scaler.transform(train[cols])
+    validate[cols] = scaler.transform(validate[cols])
+    test[cols] = scaler.transform(test[cols])
+    return train, validate, test
 
 
 def df_upper_outliers(df, k, cols):
@@ -191,7 +210,7 @@ def remove_outliers(df, k, cols):
 def feature_engineering(df):
     #Feature engineering new variables to combat multicolinearty and test to see if new features help the model
 
-    df['pool_encoded'] = df.poolcnt.map({True:1, False:0})
+    # df['pool_encoded'] = df.poolcnt.map({True:1, False:0})
     # Making lat and long usuable by dividing by 1 000 000
     df['lat'] = df.latitude / 1_000_000
     df['long'] = df.longitude / 1_000_000
@@ -201,15 +220,21 @@ def feature_engineering(df):
   
     #dropping year built and turning it into house age which will then be scaled
     df['house_age'] = 2017 - df['yearbuilt']
+    return df
     
-
-
-
-    #Deleting duplicate rows
-    #df = df.drop(columns=['fips', 'yearbuilt', 'bedroomcnt', 'taxvaluedollarcnt', 'calculatedfinishedsquarefeet', 'bathroomcnt', 'poolcnt', 'lotsizesquarefeet', 'year_built', 'garagecarcnt', 'beds', 'baths'])
-    
+def latlong_to_cart(df):
+    df['coslat'] = df.lat.apply(math.cos)
+    df['coslong'] = df.long.apply(math.cos)
+    df['sinlong'] = df.long.apply(math.sin)
+    df['x'] = df.coslong * df.coslat
+    df['y'] = df.coslat * df.sinlong
+    df['z'] = df.latitude.apply(math.sin) 
     return df
 
+def cart2pol(x, y):
+    rho = np.sqrt(x**2 + y**2)
+    phi = np.arctan2(y, x)
+    return rho, phi
 
 def add_upper_outlier_columns(df, k=1.5):
     '''
@@ -233,6 +258,37 @@ def data_prep(df, cols_to_remove=[], prop_required_column=0.5, prop_required_row
     df = handle_missing_values(df, prop_required_column, prop_required_row)
     return df
 
+def combine_transactions(df):
+    df['logerror'] = 0
+    df.loc[~df['logerror17'].isnull(), 'logerror'] = df.loc[~df['logerror17'].isnull(), 'logerror17']
+    df.loc[~df['logerror16'].isnull(), 'logerror'] = df.loc[~df['logerror16'].isnull(), 'logerror16']
+    df['transactiondate'] = None
+    df.loc[~df['transaction17'].isnull(), 'transactiondate'] = df.loc[~df['transaction17'].isnull(), 'transaction17']
+    df.loc[~df['transaction16'].isnull(), 'transactiondate'] = df.loc[~df['transaction16'].isnull(), 'transaction16']   
+
+    df = df.drop(columns= ['transaction16','transaction17', 'logerror16', 'logerror17'])
+
+    return df
+
+def add_date_features(df):
+    
+    df['transactiondate'] = pd.to_datetime(df['transactiondate'], format= '%Y/%m/%d')
+
+    df["transaction_month"] = df["transactiondate"].dt.month
+    
+    df["transaction_quarter"] = df["transactiondate"].dt.quarter
+
+    df.drop(["transactiondate"], inplace=True, axis=1)
+    
+    return df
+
+def county_name(county):
+    if county == 6037:
+        return 'Los Angeles'
+    elif county == 6059:
+        return 'Orange'
+    elif county == 6111:
+        return 'Ventura'
 
 def split_data(df):
 
